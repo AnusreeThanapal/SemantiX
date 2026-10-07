@@ -1,0 +1,20 @@
+# Environment variables and local secrets
+.env
+.env.*
+!.env.example
+
+# Python artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Local application data
+semantix.db
+*.sqlite
+*.sqlite3
+
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
