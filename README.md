@@ -201,6 +201,7 @@ To create a production build, run `npm run build`.
 | `AZURE_OPENAI_EMBEDDING_KEY` | Key for the embedding model (falls back to the chat key) | none |
 | `AZURE_OPENAI_EMBEDDING_DEPLOYMENT` | Embedding deployment name | `text-embedding-3-large` |
 | `SEMANTIX_DB_PATH` | Path to the SQLite database | `semantix.db` |
+| `SEMANTIX_ANALYSIS_DB_DIR` | Directory for isolated per-analysis results | `semantix_analyses` beside the main database |
 | `SEMANTIX_CORS_ORIGINS` | Comma-separated list of allowed browser origins | `http://localhost:5173,http://127.0.0.1:5173` |
 
 ### Front end (`frontend/.env`)
@@ -236,11 +237,11 @@ curl -X POST http://localhost:8000/repos/analyze \
 # 2. Poll the job (use the job_id from step 1)
 curl http://localhost:8000/jobs/<job_id>
 
-# 3. Explore results
-curl "http://localhost:8000/commits?limit=20"
-curl http://localhost:8000/commits/<sha>/impact
-curl http://localhost:8000/commits/<sha>/explanation
-curl "http://localhost:8000/hotspots?limit=10"
+# 3. Explore results for that analysis job
+curl "http://localhost:8000/commits?job_id=<job_id>&limit=20"
+curl "http://localhost:8000/commits/<sha>/impact?job_id=<job_id>"
+curl "http://localhost:8000/commits/<sha>/explanation?job_id=<job_id>"
+curl "http://localhost:8000/hotspots?job_id=<job_id>&limit=10"
 ```
 
 ---
@@ -252,10 +253,10 @@ curl "http://localhost:8000/hotspots?limit=10"
 | `GET` | `/` | Service name and version. |
 | `POST` | `/repos/analyze` | Starts an analysis job. Returns `202 Accepted` with a `job_id`. |
 | `GET` | `/jobs/{job_id}` | Returns job status: `pending`, `running`, `complete` or `failed`. |
-| `GET` | `/commits` | Paginated commit summaries (sha, author, timestamp, message, change type, risk level). Query: `limit` (1–500), `offset`. |
-| `GET` | `/commits/{sha}/impact` | Impact subgraph(s) for a commit. Optional `file_path` filter. |
-| `GET` | `/commits/{sha}/explanation` | Explanation(s) for a commit. Optional `file_path` filter. |
-| `GET` | `/hotspots` | Files ranked by semantic churn. Query: `limit` (1–100). |
+| `GET` | `/commits` | Paginated commit summaries scoped by required `job_id`. Query: `limit` (1–500), `offset`. |
+| `GET` | `/commits/{sha}/impact` | Impact subgraph(s) scoped by required `job_id`. Optional `file_path` filter. |
+| `GET` | `/commits/{sha}/explanation` | Explanation(s) scoped by required `job_id`. Optional `file_path` filter. |
+| `GET` | `/hotspots` | Files ranked by semantic churn for required `job_id`. Query: `limit` (1–100). |
 
 **`POST /repos/analyze` request**
 
@@ -282,6 +283,7 @@ curl "http://localhost:8000/hotspots?limit=10"
 ```
 
 When a commit contains several analysed files, the impact and explanation endpoints return a list; use the `file_path` query parameter to select one.
+Each analysis stores results in a separate database. Include the `job_id` returned by `/repos/analyze` in every analytics request to avoid mixing results from different repositories.
 
 ---
 
@@ -315,7 +317,7 @@ SemantiX is a research prototype. The following behaviours are worth knowing bef
 - **Rule-based categories.** Rules are ordered and use line-level patterns; confidence values are hand-set constants.
 - **Static, name-based dependency graph.** The graph is built once from the latest file contents seen during ingestion, resolves calls by name only, and traverses edges in both directions. Only Python and JavaScript are supported.
 - **Unsupported file types** (for example CSS, JSON, HTML) are labelled `unknown`.
-- **Re-analysis appends data.** Running the same analysis again inserts additional change records, because the `changed_files` and `change_records` tables have no uniqueness constraint. Counts and hotspot scores can therefore be inflated by repeated runs; use a fresh database (`SEMANTIX_DB_PATH`) for clean results.
+- **Per-analysis storage.** Each run stores commits, dependency impacts, explanations and hotspots in a separate result database. Repeated runs no longer append analytics rows to the same repository results.
 - **Embedding input** is truncated to the first 8,000 characters of each file.
 
 ---

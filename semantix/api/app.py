@@ -4,6 +4,7 @@ import os
 import uuid
 import logging
 from datetime import datetime, UTC
+from pathlib import Path
 from typing import List, Optional, Dict, Any, Union
 from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -51,6 +52,17 @@ def get_repo() -> SQLiteRepository:
     return SQLiteRepository(db_path=db_path)
 
 
+def get_analysis_repo(job_id: str) -> SQLiteRepository:
+    repository = get_repo()
+    job = repository.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Analysis job not found")
+
+    results_db_path = repository.get_analysis_database_path(job_id)
+    if not results_db_path or not os.path.isfile(results_db_path):
+        raise HTTPException(status_code=404, detail="Analysis results are not available")
+    return SQLiteRepository(db_path=results_db_path)
+
 
 @app.get("/")
 def read_root():
@@ -66,6 +78,13 @@ def analyze_repo(req: AnalyzeRepoRequest, background_tasks: BackgroundTasks):
 
     repository = get_repo()
     repository.save_job(job)
+    results_dir = Path(os.getenv(
+        "SEMANTIX_ANALYSIS_DB_DIR",
+        str(Path(repository.db_path).resolve().parent / "semantix_analyses"),
+    ))
+    results_dir.mkdir(parents=True, exist_ok=True)
+    results_db_path = str(results_dir / f"{job_id}.db")
+    repository.register_analysis_database(job_id, results_db_path)
 
     background_tasks.add_task(
         run_analysis_pipeline,
@@ -74,6 +93,7 @@ def analyze_repo(req: AnalyzeRepoRequest, background_tasks: BackgroundTasks):
         commit_depth=req.commit_depth,
         hop_limit=req.hop_limit,
         db_path=repository.db_path,
+        results_db_path=results_db_path,
     )
 
     return AnalyzeRepoResponse(job_id=job_id, status="pending")
@@ -90,16 +110,24 @@ def get_job_status(job_id: str):
 
 
 @app.get("/commits", response_model=List[Dict[str, Any]])
-def list_commits(limit: int = Query(50, ge=1, le=500), offset: int = Query(0, ge=0)):
+def list_commits(
+    job_id: str = Query(..., description="Analysis job whose results should be returned"),
+    limit: int = Query(50, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+):
     """Returns paginated list of analyzed commits with change_type and risk_level."""
-    repository = get_repo()
+    repository = get_analysis_repo(job_id)
     return repository.get_commits_paginated(limit=limit, offset=offset)
 
 
 @app.get("/commits/{sha}/impact", response_model=Union[ImpactSubgraph, List[ImpactSubgraph]])
-def get_commit_impact(sha: str, file_path: Optional[str] = Query(None, description="Optional file path filter")):
+def get_commit_impact(
+    sha: str,
+    job_id: str = Query(..., description="Analysis job whose results should be returned"),
+    file_path: Optional[str] = Query(None, description="Optional file path filter"),
+):
     """Returns the ImpactSubgraph(s) for a specific commit SHA."""
-    repository = get_repo()
+    repository = get_analysis_repo(job_id)
     if file_path:
         impact = repository.get_impact_subgraph_for_commit(sha, file_path=file_path)
         if not impact:
@@ -115,9 +143,13 @@ def get_commit_impact(sha: str, file_path: Optional[str] = Query(None, descripti
 
 
 @app.get("/commits/{sha}/explanation", response_model=Union[Explanation, List[Explanation]])
-def get_commit_explanation(sha: str, file_path: Optional[str] = Query(None, description="Optional file path filter")):
+def get_commit_explanation(
+    sha: str,
+    job_id: str = Query(..., description="Analysis job whose results should be returned"),
+    file_path: Optional[str] = Query(None, description="Optional file path filter"),
+):
     """Returns the stored Explanation(s) for a specific commit SHA."""
-    repository = get_repo()
+    repository = get_analysis_repo(job_id)
     if file_path:
         explanation = repository.get_explanation_for_commit(sha, file_path=file_path)
         if not explanation:
@@ -133,7 +165,17 @@ def get_commit_explanation(sha: str, file_path: Optional[str] = Query(None, desc
 
 
 @app.get("/hotspots", response_model=List[HotspotItem])
-def get_hotspots(limit: int = Query(10, ge=1, le=100)):
+def get_hotspots(
+    job_id: str = Query(..., description="Analysis job whose results should be returned"),
+    limit: int = Query(10, ge=1, le=100),
+):
     """Returns modules ranked by semantic churn count (logic_change and api_change count)."""
-    repository = get_repo()
+    repository = get_analysis_repo(job_id)
     return repository.get_hotspots(limit=limit)
+
+
+try:
+    from semantix.api.graph_routes import router as graph_router
+    app.include_router(graph_router)
+except Exception as _graph_exc:  # optional routes must never break the core API
+    logger.warning("Graph insights routes unavailable: %s", _graph_exc)

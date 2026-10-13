@@ -12,6 +12,8 @@ venv/
 
 # Local application data
 semantix.db
+*.db
+semantix_analyses/
 *.sqlite
 *.sqlite3
 

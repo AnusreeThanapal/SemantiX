@@ -49,6 +49,28 @@ class SQLiteRepository:
             )
         return None
 
+    def register_analysis_database(self, job_id: str, db_path: str):
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """INSERT OR REPLACE INTO analysis_databases (job_id, db_path)
+               VALUES (?, ?)""",
+            (job_id, db_path),
+        )
+        conn.commit()
+        conn.close()
+
+    def get_analysis_database_path(self, job_id: str) -> Optional[str]:
+        conn = self._get_conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT db_path FROM analysis_databases WHERE job_id = ?",
+            (job_id,),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return row["db_path"] if row else None
+
     # 2. Commits & Changed Files
     def save_commit(self, commit: Commit):
         conn = self._get_conn()

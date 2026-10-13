@@ -54,6 +54,79 @@ export interface HotspotResult {
   semantic_churn_count: number;
 }
 
+export interface ImpactNodeDetail {
+  id: string;
+  label: string;
+  node_type: string;
+  file: string;
+  hop: number;
+  in_degree: number;
+  out_degree: number;
+}
+
+export interface ImpactEdgeDetail {
+  source: string;
+  target: string;
+  relation: 'imports' | 'defines' | 'calls' | string;
+  synthetic: boolean;
+}
+
+export interface ImpactDetailedResult {
+  commit_sha: string;
+  changed_node: string;
+  hop_limit: number;
+  nodes: ImpactNodeDetail[];
+  edges: ImpactEdgeDetail[];
+  stats: {
+    nodes: number;
+    edges: number;
+    direct: number;
+    transitive: number;
+    max_hop: number;
+    files_affected: number;
+    top_hub: string | null;
+  };
+  warnings: string[];
+}
+
+export interface CodeBertStatus {
+  state: 'disabled' | 'unloaded' | 'loading' | 'ready' | 'fallback' | 'error' | string;
+  kind: 'codebert' | 'fallback-heuristic' | string;
+  model_name?: string;
+  device?: string;
+  dim?: number;
+  message?: string;
+}
+
+export interface CodeBertInsights {
+  commit_sha: string;
+  status: string;
+  engine?: {
+    name?: string;
+    kind?: string;
+    device?: string;
+    dim?: number;
+  };
+  node_scores: Record<string, { semantic_score: number; percentile: number }>;
+  drift: {
+    file: string;
+    cosine: number | null;
+    drift: number | null;
+    level?: string;
+  }[];
+  latent_dependencies: {
+    id: string;
+    label: string;
+    file: string;
+    node_type: string;
+    score: number;
+    percentile: number;
+  }[];
+  warnings: string[];
+  message?: string;
+  timings_ms?: { total: number };
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     let errorMsg = `API Request failed with status ${response.status}`;
@@ -89,29 +162,67 @@ export const api = {
     return handleResponse<JobStatusResult>(res);
   },
 
-  async getCommits(limit: number = 100, offset: number = 0): Promise<CommitSummary[]> {
-    const res = await fetch(`${BASE_URL}/commits?limit=${limit}&offset=${offset}`);
+  async getCommits(jobId: string, limit: number = 100, offset: number = 0): Promise<CommitSummary[]> {
+    const params = new URLSearchParams({
+      job_id: jobId,
+      limit: String(limit),
+      offset: String(offset),
+    });
+    const res = await fetch(`${BASE_URL}/commits?${params}`);
     return handleResponse<CommitSummary[]>(res);
   },
 
-  async getCommitImpact(sha: string, filePath?: string): Promise<ImpactSubgraphResult | ImpactSubgraphResult[]> {
-    const url = filePath
-      ? `${BASE_URL}/commits/${encodeURIComponent(sha)}/impact?file_path=${encodeURIComponent(filePath)}`
-      : `${BASE_URL}/commits/${encodeURIComponent(sha)}/impact`;
+  async getCommitImpact(
+    jobId: string,
+    sha: string,
+    filePath?: string,
+  ): Promise<ImpactSubgraphResult | ImpactSubgraphResult[]> {
+    const params = new URLSearchParams({ job_id: jobId });
+    if (filePath) params.set('file_path', filePath);
+    const url = `${BASE_URL}/commits/${encodeURIComponent(sha)}/impact?${params}`;
     const res = await fetch(url);
     return handleResponse<ImpactSubgraphResult | ImpactSubgraphResult[]>(res);
   },
 
-  async getCommitExplanation(sha: string, filePath?: string): Promise<ExplanationResult | ExplanationResult[]> {
-    const url = filePath
-      ? `${BASE_URL}/commits/${encodeURIComponent(sha)}/explanation?file_path=${encodeURIComponent(filePath)}`
-      : `${BASE_URL}/commits/${encodeURIComponent(sha)}/explanation`;
+  async getCommitExplanation(
+    jobId: string,
+    sha: string,
+    filePath?: string,
+  ): Promise<ExplanationResult | ExplanationResult[]> {
+    const params = new URLSearchParams({ job_id: jobId });
+    if (filePath) params.set('file_path', filePath);
+    const url = `${BASE_URL}/commits/${encodeURIComponent(sha)}/explanation?${params}`;
     const res = await fetch(url);
     return handleResponse<ExplanationResult | ExplanationResult[]>(res);
   },
 
-  async getHotspots(limit: number = 20): Promise<HotspotResult[]> {
-    const res = await fetch(`${BASE_URL}/hotspots?limit=${limit}`);
+  async getHotspots(jobId: string, limit: number = 20): Promise<HotspotResult[]> {
+    const params = new URLSearchParams({ job_id: jobId, limit: String(limit) });
+    const res = await fetch(`${BASE_URL}/hotspots?${params}`);
     return handleResponse<HotspotResult[]>(res);
+  },
+
+  async getCommitImpactDetailed(sha: string, hops: number = 3): Promise<ImpactDetailedResult> {
+    const url = `${BASE_URL}/commits/${encodeURIComponent(sha)}/impact/detailed?hops=${hops}`;
+    const res = await fetch(url);
+    return handleResponse<ImpactDetailedResult>(res);
+  },
+
+  async getCodeBertStatus(): Promise<CodeBertStatus> {
+    const res = await fetch(`${BASE_URL}/codebert/status`);
+    return handleResponse<CodeBertStatus>(res);
+  },
+
+  async warmupCodeBert(): Promise<CodeBertStatus> {
+    const res = await fetch(`${BASE_URL}/codebert/warmup`, {
+      method: 'POST',
+    });
+    return handleResponse<CodeBertStatus>(res);
+  },
+
+  async getCodeBertInsights(sha: string, hops: number = 3, latentK: number = 8): Promise<CodeBertInsights> {
+    const url = `${BASE_URL}/commits/${encodeURIComponent(sha)}/impact/codebert?hops=${hops}&latent_k=${latentK}`;
+    const res = await fetch(url);
+    return handleResponse<CodeBertInsights>(res);
   },
 };

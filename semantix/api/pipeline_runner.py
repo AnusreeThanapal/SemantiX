@@ -20,16 +20,18 @@ def run_analysis_pipeline(
     commit_depth: int = 100,
     hop_limit: int = 3,
     db_path: str = "semantix.db",
+    results_db_path: str = "semantix_analysis.db",
 ):
     """Executes full SemantiX analytics pipeline as a background job."""
-    repo = SQLiteRepository(db_path=db_path)
+    job_repository = SQLiteRepository(db_path=db_path)
+    results_repository = SQLiteRepository(db_path=results_db_path)
     
     # 1. Update job to running
-    job = repo.get_job(job_id) or AnalysisJob(
+    job = job_repository.get_job(job_id) or AnalysisJob(
         job_id=job_id, status="running", created_at=datetime.now(UTC).isoformat()
     )
     job.status = "running"
-    repo.save_job(job)
+    job_repository.save_job(job)
 
     ingestor: Optional[GitIngestor] = None
     try:
@@ -40,7 +42,7 @@ def run_analysis_pipeline(
         commits = ingestor.get_commits(depth=commit_depth)
 
         for commit in commits:
-            repo.save_commit(commit)
+            results_repository.save_commit(commit)
 
         # Build repository code snapshot map for static dependency graph
         file_contents = {}
@@ -61,25 +63,25 @@ def run_analysis_pipeline(
         # Stage 3, 4, 5: Diffing, Impact Subgraph & LLM Explanation per commit & file
         for commit in commits:
             change_records = diff_pipeline.process_commit(commit)
-            repo.save_change_records(change_records)
+            results_repository.save_change_records(change_records)
 
             for cr in change_records:
                 impact_subgraph = impact_analyzer.compute_impact(graph, cr, hop_limit=hop_limit)
                 impact_subgraph.commit_sha = commit.sha
                 impact_subgraph.file_path = cr.file
-                repo.save_impact_subgraph(commit.sha, impact_subgraph, file_path=cr.file)
+                results_repository.save_impact_subgraph(commit.sha, impact_subgraph, file_path=cr.file)
 
                 code_window = cr.ast_edit_summary
                 explanation = llm_explainer.generate_explanation(
                     commit.sha, cr, impact_subgraph, code_window
                 )
                 explanation.file_path = cr.file
-                repo.save_explanation(explanation, file_path=cr.file)
+                results_repository.save_explanation(explanation, file_path=cr.file)
 
         # Mark job complete
         job.status = "complete"
         job.completed_at = datetime.now(UTC).isoformat()
-        repo.save_job(job)
+        job_repository.save_job(job)
         logger.info(f"Completed analysis job {job_id} successfully.")
 
     except Exception as e:
@@ -87,7 +89,7 @@ def run_analysis_pipeline(
         job.status = "failed"
         job.error = str(e)
         job.completed_at = datetime.now(UTC).isoformat()
-        repo.save_job(job)
+        job_repository.save_job(job)
 
     finally:
         if ingestor:
@@ -95,4 +97,3 @@ def run_analysis_pipeline(
                 ingestor.close()
             except Exception as close_err:
                 logger.warning(f"Error during ingestor close: {close_err}")
-

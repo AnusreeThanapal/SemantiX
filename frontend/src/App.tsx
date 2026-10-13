@@ -1,6 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { RepoProvider, useRepoContext } from './context/RepoContext';
+import { RepoProvider } from './context/RepoContext';
+import { useRepoContext } from './context/useRepoContext';
 import { AppShell } from './components/layout/AppShell';
 import { RepoInputView } from './components/views/RepoInputView';
 import { TimelineView } from './components/views/TimelineView';

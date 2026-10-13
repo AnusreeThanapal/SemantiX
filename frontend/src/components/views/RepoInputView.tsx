@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { useRepoContext } from '../../context/RepoContext';
+import { useRepoContext } from '../../context/useRepoContext';
 import { api, type JobStatusResult } from '../../api/client';
 
 import { GitBranch, Play, CheckCircle2, AlertCircle, Loader2, ArrowRight } from 'lucide-react';
@@ -12,8 +12,14 @@ export const RepoInputView: React.FC = () => {
   const [depth, setDepth] = useState<number>(100);
   const [hopLimit, setHopLimit] = useState<number>(3);
   const [submitting, setSubmitting] = useState<boolean>(false);
-  const [jobStatus, setJobStatus] = useState<JobStatusResult | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [trackedJob, setTrackedJob] = useState<{
+    jobId: string;
+    status: JobStatusResult | null;
+    error: string | null;
+  } | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const jobStatus = trackedJob?.jobId === jobId ? trackedJob.status : null;
+  const errorMsg = submitError ?? (trackedJob?.jobId === jobId ? trackedJob.error : null);
 
   // Poll job status every 2 seconds when jobId exists and is running/pending
   useEffect(() => {
@@ -24,19 +30,25 @@ export const RepoInputView: React.FC = () => {
       try {
         const res = await api.getJobStatus(jobId);
         if (isSubscribed) {
-          setJobStatus(res);
+          setTrackedJob({
+            jobId,
+            status: res,
+            error: res.status === 'failed' ? res.error || 'Repository analysis failed' : null,
+          });
           if (res.status === 'complete') {
             // Automatically switch to timeline view when analysis completes
             setTimeout(() => {
               if (isSubscribed) setActiveView('timeline');
             }, 1000);
-          } else if (res.status === 'failed') {
-            setErrorMsg(res.error || 'Repository analysis failed');
           }
         }
-      } catch (err: any) {
+      } catch (err: unknown) {
         if (isSubscribed) {
-          setErrorMsg(err.message || 'Failed to check job status');
+          setTrackedJob({
+            jobId,
+            status: null,
+            error: err instanceof Error ? err.message : 'Failed to check job status',
+          });
         }
       }
     };
@@ -59,15 +71,13 @@ export const RepoInputView: React.FC = () => {
     if (!repoUrlOrPath.trim()) return;
 
     setSubmitting(true);
-    setErrorMsg(null);
-    setJobStatus(null);
+    setSubmitError(null);
+    setTrackedJob(null);
+    setJobId(null);
 
     try {
-      // Reset frontend state for new repo analysis
       setSelectedCommitSha(null);
-      queryClient.invalidateQueries({ queryKey: ['commits'] });
-      queryClient.invalidateQueries({ queryKey: ['hotspots'] });
-      queryClient.invalidateQueries({ queryKey: ['impact'] });
+      queryClient.clear();
 
       const res = await api.analyzeRepo({
         repo_url_or_path: repoUrlOrPath.trim(),
@@ -75,8 +85,8 @@ export const RepoInputView: React.FC = () => {
         hop_limit: hopLimit,
       });
       setJobId(res.job_id);
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to start analysis');
+    } catch (err: unknown) {
+      setSubmitError(err instanceof Error ? err.message : 'Failed to start analysis');
     } finally {
       setSubmitting(false);
     }

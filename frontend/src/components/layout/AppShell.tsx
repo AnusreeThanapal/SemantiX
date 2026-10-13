@@ -1,5 +1,6 @@
 import React from 'react';
-import { useRepoContext, type ViewType } from '../../context/RepoContext';
+import type { ViewType } from '../../context/RepoContext';
+import { useRepoContext } from '../../context/useRepoContext';
 
 import { FolderGit2, GitCommit, Network, Flame, RefreshCw, Cpu } from 'lucide-react';
 

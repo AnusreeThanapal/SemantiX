@@ -2,17 +2,20 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as d3 from 'd3';
 import { api, type HotspotResult } from '../../api/client';
+import { useRepoContext } from '../../context/useRepoContext';
 import { Flame, Loader2, AlertCircle, TrendingUp, Info, LayoutGrid, ListFilter } from 'lucide-react';
 
 export const HotspotHeatmapView: React.FC = () => {
+  const { jobId } = useRepoContext();
   const svgRef = useRef<SVGSVGElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const [displayMode, setDisplayMode] = useState<'treemap' | 'list'>('treemap');
 
   const { data: hotspots, isLoading, isError, error } = useQuery<HotspotResult[]>({
-    queryKey: ['hotspots'],
-    queryFn: () => api.getHotspots(30),
+    queryKey: ['hotspots', jobId],
+    queryFn: () => api.getHotspots(jobId!, 30),
+    enabled: !!jobId,
   });
 
   const [hoveredModule, setHoveredModule] = useState<HotspotResult | null>(null);

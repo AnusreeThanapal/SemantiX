@@ -80,6 +80,12 @@ def init_db(db_path: str = DEFAULT_DB_PATH):
             error TEXT
         );
 
+        CREATE TABLE IF NOT EXISTS analysis_databases (
+            job_id TEXT PRIMARY KEY,
+            db_path TEXT NOT NULL,
+            FOREIGN KEY (job_id) REFERENCES jobs (job_id)
+        );
+
         CREATE TABLE IF NOT EXISTS embeddings_cache (
             content_hash TEXT PRIMARY KEY,
             embedding_json TEXT NOT NULL

@@ -2,24 +2,13 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import * as d3 from 'd3';
 import { api, type ExplanationResult } from '../../api/client';
-import { useRepoContext } from '../../context/RepoContext';
+import { useRepoContext } from '../../context/useRepoContext';
 import { RiskSummaryHeader } from '../analytics/RiskSummaryHeader';
 import { Filter, Calendar, User, Tag, ArrowRight, ShieldAlert, Loader2, AlertCircle, Sparkles } from 'lucide-react';
-
-
-// Fixed color palette per change_type
-export const CHANGE_TYPE_COLORS: Record<string, string> = {
-  logic_change: '#10b981',      // Emerald
-  api_change: '#f59e0b',        // Amber
-  refactor: '#8b5cf6',          // Violet
-  bug_fix_pattern: '#06b6d4',   // Cyan
-  'formatting/cosmetic': '#64748b', // Slate
-  rename: '#ec4899',            // Pink
-  unknown: '#71717a',           // Zinc
-};
+import { CHANGE_TYPE_COLORS } from './changeTypeColors';
 
 export const TimelineView: React.FC = () => {
-  const { selectedCommitSha, setSelectedCommitSha, setActiveView } = useRepoContext();
+  const { jobId, selectedCommitSha, setSelectedCommitSha, setActiveView } = useRepoContext();
   const svgRef = useRef<SVGSVGElement | null>(null);
 
   // Filters state
@@ -29,23 +18,28 @@ export const TimelineView: React.FC = () => {
 
   // Fetch commits
   const { data: commits, isLoading, isError, error } = useQuery({
-    queryKey: ['commits'],
-    queryFn: () => api.getCommits(200, 0),
+    queryKey: ['commits', jobId],
+    queryFn: () => api.getCommits(jobId!, 200, 0),
+    enabled: !!jobId,
   });
 
   // Fetch hotspots for top header stats
   const { data: hotspots } = useQuery({
-    queryKey: ['hotspots'],
-    queryFn: () => api.getHotspots(10),
+    queryKey: ['hotspots', jobId],
+    queryFn: () => api.getHotspots(jobId!, 10),
+    enabled: !!jobId,
   });
 
-  const [selectedExpFileIndex, setSelectedExpFileIndex] = useState<number>(0);
+  const [explanationSelection, setExplanationSelection] = useState<{
+    sha: string | null;
+    index: number;
+  }>({ sha: null, index: 0 });
 
   // Fetch explanation for selected commit
   const { data: rawExplanation, isLoading: expLoading } = useQuery<ExplanationResult | ExplanationResult[]>({
-    queryKey: ['explanation', selectedCommitSha],
-    queryFn: () => api.getCommitExplanation(selectedCommitSha!),
-    enabled: !!selectedCommitSha,
+    queryKey: ['explanation', jobId, selectedCommitSha],
+    queryFn: () => api.getCommitExplanation(jobId!, selectedCommitSha!),
+    enabled: !!jobId && !!selectedCommitSha,
   });
 
   const explanationList: ExplanationResult[] = useMemo(() => {
@@ -53,9 +47,8 @@ export const TimelineView: React.FC = () => {
     return Array.isArray(rawExplanation) ? rawExplanation : [rawExplanation];
   }, [rawExplanation]);
 
-  useEffect(() => {
-    setSelectedExpFileIndex(0);
-  }, [selectedCommitSha]);
+  const selectedExpFileIndex =
+    explanationSelection.sha === selectedCommitSha ? explanationSelection.index : 0;
 
   const explanation: ExplanationResult | null =
     explanationList[selectedExpFileIndex] || explanationList[0] || null;
@@ -342,7 +335,7 @@ export const TimelineView: React.FC = () => {
                       {explanationList.map((exp, idx) => (
                         <button
                           key={idx}
-                          onClick={() => setSelectedExpFileIndex(idx)}
+                          onClick={() => setExplanationSelection({ sha: selectedCommitSha, index: idx })}
                           className={`px-2 py-1 text-[11px] font-mono rounded transition-colors ${
                             selectedExpFileIndex === idx
                               ? 'bg-cyan-950 text-cyan-300 border border-cyan-500/60 font-semibold'

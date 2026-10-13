@@ -24,7 +24,7 @@ def test_api_root(api_client):
     assert "SemantiX" in data["message"]
 
 
-def test_full_pipeline_via_api(api_client, temp_git_repo):
+def test_full_pipeline_via_api(api_client, temp_git_repo, tmp_path):
     # 1. Trigger analysis job
     response = api_client.post(
         "/repos/analyze",
@@ -52,7 +52,7 @@ def test_full_pipeline_via_api(api_client, temp_git_repo):
     assert completed, "Background analysis job did not complete in time"
 
     # 3. Test GET /commits
-    commits_res = api_client.get("/commits")
+    commits_res = api_client.get("/commits", params={"job_id": job_id})
     assert commits_res.status_code == 200
     commits_list = commits_res.json()
     assert len(commits_list) == 3
@@ -62,7 +62,7 @@ def test_full_pipeline_via_api(api_client, temp_git_repo):
     assert "risk_level" in commits_list[0]
 
     # 4. Test GET /commits/{sha}/impact
-    impact_res = api_client.get(f"/commits/{target_sha}/impact")
+    impact_res = api_client.get(f"/commits/{target_sha}/impact", params={"job_id": job_id})
     assert impact_res.status_code == 200
     impact_data = impact_res.json()
     if isinstance(impact_data, list):
@@ -72,7 +72,7 @@ def test_full_pipeline_via_api(api_client, temp_git_repo):
         assert "changed_node" in impact_data
 
     # 5. Test GET /commits/{sha}/explanation
-    exp_res = api_client.get(f"/commits/{target_sha}/explanation")
+    exp_res = api_client.get(f"/commits/{target_sha}/explanation", params={"job_id": job_id})
     assert exp_res.status_code == 200
     exp_data = exp_res.json()
     if isinstance(exp_data, list):
@@ -86,10 +86,70 @@ def test_full_pipeline_via_api(api_client, temp_git_repo):
         assert exp_data["risk_level"] in ("low", "medium", "high", "critical")
 
     # 6. Test GET /hotspots
-    hotspots_res = api_client.get("/hotspots")
+    hotspots_res = api_client.get("/hotspots", params={"job_id": job_id})
     assert hotspots_res.status_code == 200
     hotspots_data = hotspots_res.json()
     assert isinstance(hotspots_data, list)
+
+    # A later analysis must not leak commits into or replace this job's results.
+    import git
+
+    second_repo_path = os.path.join(str(tmp_path), "second-repo")
+    second_repo = git.Repo.init(second_repo_path)
+    with second_repo.config_writer() as config:
+        config.set_value("user", "name", "Second Developer")
+        config.set_value("user", "email", "second@example.com")
+
+    second_file = os.path.join(second_repo_path, "second_project.py")
+    with open(second_file, "w", encoding="utf-8") as file:
+        file.write("def initial():\n    return 1\n")
+    second_repo.index.add(["second_project.py"])
+    second_repo.index.commit("Second repository initial commit")
+    with open(second_file, "w", encoding="utf-8") as file:
+        file.write("def initial():\n    return 2\n")
+    second_repo.index.add(["second_project.py"])
+    second_repo.index.commit("Second repository update")
+
+    second_analysis = api_client.post(
+        "/repos/analyze",
+        json={"repo_url_or_path": second_repo_path, "commit_depth": 10},
+    )
+    assert second_analysis.status_code == 202
+    second_job_id = second_analysis.json()["job_id"]
+
+    second_completed = False
+    for _ in range(20):
+        second_job_res = api_client.get(f"/jobs/{second_job_id}")
+        assert second_job_res.status_code == 200
+        second_job_data = second_job_res.json()
+        if second_job_data["status"] == "complete":
+            second_completed = True
+            break
+        if second_job_data["status"] == "failed":
+            pytest.fail(f"Second job failed with error: {second_job_data.get('error')}")
+        time.sleep(0.5)
+    assert second_completed, "Second analysis job did not complete in time"
+
+    second_commits_res = api_client.get("/commits", params={"job_id": second_job_id})
+    assert second_commits_res.status_code == 200
+    second_commits = second_commits_res.json()
+    assert len(second_commits) == 2
+    assert {commit["sha"] for commit in second_commits} == {
+        commit.hexsha for commit in second_repo.iter_commits(max_count=2)
+    }
+    assert all(commit["sha"] not in {item["sha"] for item in commits_list} for commit in second_commits)
+    assert api_client.get(
+        f"/commits/{target_sha}/impact",
+        params={"job_id": second_job_id},
+    ).status_code == 404
+
+    second_hotspots = api_client.get("/hotspots", params={"job_id": second_job_id})
+    assert second_hotspots.status_code == 200
+    assert all(item["module"] == "second_project.py" for item in second_hotspots.json())
+
+    first_commits_again = api_client.get("/commits", params={"job_id": job_id})
+    assert first_commits_again.status_code == 200
+    assert len(first_commits_again.json()) == 3
 
 
 def test_multi_file_commit_pipeline_via_api(api_client):
@@ -152,7 +212,7 @@ def test_multi_file_commit_pipeline_via_api(api_client):
     assert completed
 
     # Query multi-file impact without file_path -> should return list
-    impact_res = api_client.get(f"/commits/{target_sha}/impact")
+    impact_res = api_client.get(f"/commits/{target_sha}/impact", params={"job_id": job_id})
     assert impact_res.status_code == 200
     impact_data = impact_res.json()
     assert isinstance(impact_data, list)
@@ -161,24 +221,29 @@ def test_multi_file_commit_pipeline_via_api(api_client):
     assert file_paths == {"service_a.py", "service_b.py", "service_c.py"}
 
     # Query impact with specific file_path -> should return single object
-    impact_a = api_client.get(f"/commits/{target_sha}/impact?file_path=service_a.py")
+    impact_a = api_client.get(
+        f"/commits/{target_sha}/impact",
+        params={"job_id": job_id, "file_path": "service_a.py"},
+    )
     assert impact_a.status_code == 200
     impact_a_data = impact_a.json()
     assert isinstance(impact_a_data, dict)
     assert impact_a_data["file_path"] == "service_a.py"
 
     # Query multi-file explanation without file_path -> should return list
-    exp_res = api_client.get(f"/commits/{target_sha}/explanation")
+    exp_res = api_client.get(f"/commits/{target_sha}/explanation", params={"job_id": job_id})
     assert exp_res.status_code == 200
     exp_data = exp_res.json()
     assert isinstance(exp_data, list)
     assert len(exp_data) == 3
 
     # Query explanation with specific file_path -> should return single object
-    exp_b = api_client.get(f"/commits/{target_sha}/explanation?file_path=service_b.py")
+    exp_b = api_client.get(
+        f"/commits/{target_sha}/explanation",
+        params={"job_id": job_id, "file_path": "service_b.py"},
+    )
     assert exp_b.status_code == 200
     exp_b_data = exp_b.json()
     assert isinstance(exp_b_data, dict)
     assert exp_b_data["file_path"] == "service_b.py"
     assert exp_b_data["commit_sha"] == target_sha
-
